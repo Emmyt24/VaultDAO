@@ -1,60 +1,57 @@
 import React from 'react';
-import { CheckCircle2, Circle, Clock } from 'lucide-react';
+import { CheckCircle2, Circle, ArrowRight } from 'lucide-react';
 
 export interface FlowStep {
-  label: string;
-  status: 'completed' | 'active' | 'pending';
-  timestamp?: string;
+    label: string;
+    completed: boolean;
+    active?: boolean;
 }
 
 interface SignatureFlowProps {
-  steps: FlowStep[];
+    steps: FlowStep[];
 }
 
 const SignatureFlow: React.FC<SignatureFlowProps> = ({ steps }) => {
-  return (
-    <div className="relative">
-      {steps.map((step, idx) => (
-        <div key={idx} className="flex items-start gap-3 pb-6 last:pb-0 relative">
-          {/* Connector Line */}
-          {idx !== steps.length - 1 && (
-            <div className="absolute left-[11px] top-6 w-0.5 h-full bg-gray-800" />
-          )}
-          
-          {/* Icon */}
-          <div className={`relative z-10 shrink-0 ${
-            step.status === 'completed' 
-              ? 'text-green-500' 
-              : step.status === 'active' 
-              ? 'text-accent' 
-              : 'text-gray-600'
-          }`}>
-            {step.status === 'completed' ? (
-              <CheckCircle2 size={24} className="fill-green-500/20" />
-            ) : step.status === 'active' ? (
-              <Clock size={24} className="animate-pulse" />
-            ) : (
-              <Circle size={24} />
-            )}
-          </div>
+    return (
+        <div className="bg-gray-800/20 rounded-xl border border-gray-700 p-6">
+            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">Signature Flow</h4>
 
-          {/* Content */}
-          <div className="flex-1 pt-0.5">
-            <div className={`text-sm font-bold ${
-              step.status === 'pending' ? 'text-gray-500' : 'text-white'
-            }`}>
-              {step.label}
+            <div className="flex items-center justify-between">
+                {steps.map((step, index) => (
+                    <React.Fragment key={index}>
+                        <div className="flex flex-col items-center gap-2">
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center transition-colors ${step.completed
+                                    ? 'bg-green-500 text-white'
+                                    : step.active
+                                        ? 'bg-purple-500 text-white'
+                                        : 'bg-gray-700 text-gray-400'
+                                }`}>
+                                {step.completed ? (
+                                    <CheckCircle2 size={20} />
+                                ) : (
+                                    <Circle size={20} />
+                                )}
+                            </div>
+                            <span className={`text-xs font-medium ${step.completed || step.active ? 'text-white' : 'text-gray-500'
+                                }`}>
+                                {step.label}
+                            </span>
+                        </div>
+
+                        {index < steps.length - 1 && (
+                            <ArrowRight
+                                size={20}
+                                className={`mx-2 ${steps[index + 1].completed || steps[index + 1].active
+                                        ? 'text-purple-400'
+                                        : 'text-gray-600'
+                                    }`}
+                            />
+                        )}
+                    </React.Fragment>
+                ))}
             </div>
-            {step.timestamp && (
-              <div className="text-xs text-gray-500 mt-1 uppercase tracking-wide">
-                {new Date(step.timestamp).toLocaleString()}
-              </div>
-            )}
-          </div>
         </div>
-      ))}
-    </div>
-  );
+    );
 };
 
 export default SignatureFlow;

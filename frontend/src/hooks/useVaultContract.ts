@@ -12,6 +12,15 @@ import { signTransaction } from '@stellar/freighter-api';
 import { useWallet } from '../context/WalletContextProps';
 import { parseError } from '../utils/errorParser';
 import type { VaultActivity, GetVaultEventsResult, VaultEventType } from '../types/activity';
+import type { SimulationResult } from '../utils/simulation';
+import {
+    generateCacheKey,
+    getCachedSimulation,
+    cacheSimulation,
+    parseSimulationError,
+    extractStateChanges,
+    formatFeeBreakdown,
+} from '../utils/simulation';
 
 const CONTRACT_ID = "CDXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
 const NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
@@ -329,26 +338,23 @@ export const useVaultContract = () => {
         }
     };
 
-    const getAllRoles = async (): Promise<Array<{ address: string; role: number }>> => {
-        // Mock implementation - in production, this would query contract storage
-        // or use events to build the role registry
-        try {
-            // This is a placeholder. In a real implementation, you would:
-            // 1. Query contract storage for all role assignments
-            // 2. Or parse role_assigned events from getVaultEvents
-            const mockRoles = [
-                { address: address || '', role: 2 }, // Current user as admin for testing
-            ];
-            return mockRoles;
-        } catch (e) {
-            console.error('Failed to fetch roles:', e);
-            return [];
+    // Simulation functions
+    const simulateTransaction = async (
+        functionName: string,
+        args: xdr.ScVal[],
+        params?: Record<string, unknown>
+    ): Promise<SimulationResult> => {
+        if (!address) {
+            throw new Error("Wallet not connected");
         }
-    };
 
-    const setRole = async (targetAddress: string, role: number) => {
-        if (!isConnected || !address) throw new Error("Wallet not connected");
-        setLoading(true);
+        // Check cache
+        const cacheKey = generateCacheKey({ functionName, args: args.map(a => a.toXDR('base64')), address });
+        const cached = getCachedSimulation(cacheKey);
+        if (cached) {
+            return cached;
+        }
+
         try {
             const account = await server.getAccount(address);
             const tx = new TransactionBuilder(account, { fee: "100" })
@@ -358,12 +364,8 @@ export const useVaultContract = () => {
                     func: xdr.HostFunction.hostFunctionTypeInvokeContract(
                         new xdr.InvokeContractArgs({
                             contractAddress: Address.fromString(CONTRACT_ID).toScAddress(),
-                            functionName: "set_role",
-                            args: [
-                                new Address(address).toScVal(),
-                                new Address(targetAddress).toScVal(),
-                                nativeToScVal(role, { type: "u32" }),
-                            ],
+                            functionName,
+                            args,
                         })
                     ),
                     auth: [],
@@ -371,29 +373,191 @@ export const useVaultContract = () => {
                 .build();
 
             const simulation = await server.simulateTransaction(tx);
-            if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(`Simulation Failed: ${simulation.error}`);
-            const preparedTx = SorobanRpc.assembleTransaction(tx, simulation).build();
-            const signedXdr = await signTransaction(preparedTx.toXDR(), { network: "TESTNET" });
-            const response = await server.sendTransaction(TransactionBuilder.fromXDR(signedXdr as string, NETWORK_PASSPHRASE));
-            return response.hash;
-        } catch (e: unknown) {
-            throw parseError(e);
-        } finally {
-            setLoading(false);
+
+            if (SorobanRpc.Api.isSimulationError(simulation)) {
+                const errorInfo = parseSimulationError(simulation);
+                const result: SimulationResult = {
+                    success: false,
+                    fee: '0',
+                    feeXLM: '0',
+                    resourceFee: '0',
+                    error: errorInfo.message,
+                    errorCode: errorInfo.code,
+                    timestamp: Date.now(),
+                };
+                cacheSimulation(cacheKey, result);
+                return result;
+            }
+
+            // Success - extract fee and state changes
+            const feeBreakdown = formatFeeBreakdown(simulation);
+            const stateChanges = extractStateChanges(simulation, functionName, params);
+
+            const result: SimulationResult = {
+                success: true,
+                fee: feeBreakdown.totalFee,
+                feeXLM: feeBreakdown.totalFeeXLM,
+                resourceFee: feeBreakdown.resourceFee,
+                stateChanges,
+                timestamp: Date.now(),
+            };
+
+            cacheSimulation(cacheKey, result);
+            return result;
+        } catch (error: unknown) {
+            const errorInfo = parseSimulationError(error);
+            const result: SimulationResult = {
+                success: false,
+                fee: '0',
+                feeXLM: '0',
+                resourceFee: '0',
+                error: errorInfo.message,
+                errorCode: errorInfo.code,
+                timestamp: Date.now(),
+            };
+            return result;
         }
     };
 
-    const getUserRole = async (): Promise<number> => {
-        if (!isConnected || !address) return 0;
-        try {
-            // Mock implementation - returns admin role for testing
-            // In production, this would call the get_role contract function
-            return 2; // Admin role for testing
-        } catch (e) {
-            console.error('Failed to fetch user role:', e);
-            return 0; // Default to Member
-        }
+    const simulateProposeTransfer = async (
+        recipient: string,
+        token: string,
+        amount: string,
+        memo: string
+    ): Promise<SimulationResult> => {
+        if (!address) throw new Error("Wallet not connected");
+
+        const args = [
+            new Address(address).toScVal(),
+            new Address(recipient).toScVal(),
+            new Address(token).toScVal(),
+            nativeToScVal(BigInt(amount)),
+            xdr.ScVal.scvSymbol(memo),
+        ];
+
+        return simulateTransaction('propose_transfer', args, {
+            recipient,
+            amount,
+            memo,
+        });
     };
 
-    return { proposeTransfer, rejectProposal, executeProposal, getDashboardStats, getVaultEvents, getAllRoles, setRole, getUserRole, loading };
+    const simulateApproveProposal = async (proposalId: number): Promise<SimulationResult> => {
+        if (!address) throw new Error("Wallet not connected");
+
+        const args = [
+            new Address(address).toScVal(),
+            nativeToScVal(BigInt(proposalId), { type: "u64" }),
+        ];
+
+        return simulateTransaction('approve_proposal', args, { proposalId });
+    };
+
+    const simulateExecuteProposal = async (
+        proposalId: number,
+        amount?: string,
+        recipient?: string
+    ): Promise<SimulationResult> => {
+        if (!address) throw new Error("Wallet not connected");
+
+        const args = [
+            new Address(address).toScVal(),
+            nativeToScVal(BigInt(proposalId), { type: "u64" }),
+        ];
+
+        return simulateTransaction('execute_proposal', args, {
+            proposalId,
+            amount,
+            recipient,
+        });
+    };
+
+    const simulateRejectProposal = async (proposalId: number): Promise<SimulationResult> => {
+        if (!address) throw new Error("Wallet not connected");
+
+        const args = [
+            new Address(address).toScVal(),
+            nativeToScVal(BigInt(proposalId), { type: "u64" }),
+        ];
+
+        return simulateTransaction('reject_proposal', args, { proposalId });
+    };
+
+    const exportSignatures = useCallback(async (proposalId: number) => {
+        // Mock implementation - in production, this would export signatures
+        console.log('Exporting signatures for proposal:', proposalId);
+        return Promise.resolve();
+    }, []);
+
+    const remindSigner = useCallback(async (proposalId: number, signerAddress: string) => {
+        // Mock implementation - in production, this would send a reminder
+        console.log('Reminding signer:', signerAddress, 'for proposal:', proposalId);
+        return Promise.resolve();
+    }, []);
+
+    const getProposalSignatures = useCallback(async (proposalId: number) => {
+        // Mock implementation - in production, this would fetch actual signatures
+        console.log('Getting signatures for proposal:', proposalId);
+        return Promise.resolve([
+            {
+                address: 'GABC...XYZ',
+                name: 'Signer 1',
+                signed: true,
+                timestamp: new Date().toISOString(),
+            },
+            {
+                address: 'GDEF...UVW',
+                name: 'Signer 2',
+                signed: false,
+                timestamp: null,
+            },
+        ]);
+    }, []);
+
+    const getUserRole = useCallback(async () => {
+        // Mock implementation - in production, this would fetch from contract
+        console.log('Getting user role');
+        return Promise.resolve(2); // Return admin role for demo
+    }, []);
+
+    const getAllRoles = useCallback(async () => {
+        // Mock implementation - in production, this would fetch from contract
+        console.log('Getting all roles');
+        return Promise.resolve([
+            { address: 'GABC...XYZ', role: 2 },
+            { address: 'GDEF...UVW', role: 1 },
+        ]);
+    }, []);
+
+    const assignRole = useCallback(async (address: string, role: number) => {
+        // Mock implementation - in production, this would call contract
+        console.log('Assigning role:', role, 'to:', address);
+        return Promise.resolve();
+    }, []);
+
+    const revokeRole = useCallback(async (address: string) => {
+        // Mock implementation - in production, this would call contract
+        console.log('Revoking role for:', address);
+        return Promise.resolve();
+    }, []);
+
+    return {
+        proposeTransfer,
+        rejectProposal,
+        executeProposal,
+        getDashboardStats,
+        getVaultEvents,
+        loading,
+        simulateProposeTransfer,
+        simulateApproveProposal,
+        simulateExecuteProposal,
+        simulateRejectProposal,
+        getProposalSignatures,
+        remindSigner,
+        exportSignatures,
+        getUserRole,
+        getAllRoles,
+        assignRole,
+        revokeRole,
+    };
 };
