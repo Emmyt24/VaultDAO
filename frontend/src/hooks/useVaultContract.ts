@@ -342,7 +342,7 @@ export const useVaultContract = () => {
     const simulateTransaction = async (
         functionName: string,
         args: xdr.ScVal[],
-        params?: Record<string, any>
+        params?: Record<string, unknown>
     ): Promise<SimulationResult> => {
         if (!address) {
             throw new Error("Wallet not connected");
@@ -404,7 +404,7 @@ export const useVaultContract = () => {
 
             cacheSimulation(cacheKey, result);
             return result;
-        } catch (error: any) {
+        } catch (error: unknown) {
             const errorInfo = parseSimulationError(error);
             const result: SimulationResult = {
                 success: false,
@@ -483,6 +483,64 @@ export const useVaultContract = () => {
         return simulateTransaction('reject_proposal', args, { proposalId });
     };
 
+    const exportSignatures = useCallback(async (proposalId: number) => {
+        // Mock implementation - in production, this would export signatures
+        console.log('Exporting signatures for proposal:', proposalId);
+        return Promise.resolve();
+    }, []);
+
+    const remindSigner = useCallback(async (proposalId: number, signerAddress: string) => {
+        // Mock implementation - in production, this would send a reminder
+        console.log('Reminding signer:', signerAddress, 'for proposal:', proposalId);
+        return Promise.resolve();
+    }, []);
+
+    const getProposalSignatures = useCallback(async (proposalId: number) => {
+        // Mock implementation - in production, this would fetch actual signatures
+        console.log('Getting signatures for proposal:', proposalId);
+        return Promise.resolve([
+            {
+                address: 'GABC...XYZ',
+                name: 'Signer 1',
+                signed: true,
+                timestamp: new Date().toISOString(),
+            },
+            {
+                address: 'GDEF...UVW',
+                name: 'Signer 2',
+                signed: false,
+                timestamp: null,
+            },
+        ]);
+    }, []);
+
+    const getUserRole = useCallback(async () => {
+        // Mock implementation - in production, this would fetch from contract
+        console.log('Getting user role');
+        return Promise.resolve(2); // Return admin role for demo
+    }, []);
+
+    const getAllRoles = useCallback(async () => {
+        // Mock implementation - in production, this would fetch from contract
+        console.log('Getting all roles');
+        return Promise.resolve([
+            { address: 'GABC...XYZ', role: 2 },
+            { address: 'GDEF...UVW', role: 1 },
+        ]);
+    }, []);
+
+    const assignRole = useCallback(async (address: string, role: number) => {
+        // Mock implementation - in production, this would call contract
+        console.log('Assigning role:', role, 'to:', address);
+        return Promise.resolve();
+    }, []);
+
+    const revokeRole = useCallback(async (address: string) => {
+        // Mock implementation - in production, this would call contract
+        console.log('Revoking role for:', address);
+        return Promise.resolve();
+    }, []);
+
     return {
         proposeTransfer,
         rejectProposal,
@@ -494,5 +552,12 @@ export const useVaultContract = () => {
         simulateApproveProposal,
         simulateExecuteProposal,
         simulateRejectProposal,
+        getProposalSignatures,
+        remindSigner,
+        exportSignatures,
+        getUserRole,
+        getAllRoles,
+        assignRole,
+        revokeRole,
     };
 };
